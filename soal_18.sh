@@ -1,15 +1,19 @@
 #!/bin/bash
 # ==============================================================================
 # Soal 18: Backup Server (kirara) & Passive Health Check pada geto
-# max_fails=2 fail_timeout=5s pada nanami & todo
+#
+# Target:
+#   - Parameter Passive Health Check: max_fails=2 fail_timeout=5s (nanami & todo)
+#   - Server Cadangan: kirara (192.221.4.8) berstatus 'backup'
+#   - Failover Otomatis: Bila nanami dan todo down, request dialihkan ke kirara
 # ==============================================================================
 set -e
 
-NODE=$(hostname)
-echo "[*] Menjalankan Soal 18 pada node: $NODE"
-
-if [ "$NODE" = "geto" ]; then
-    echo "[*] Memastikan konfigurasi backup server dan health check aktif di geto..."
+# ==============================================================================
+# SECTION 1: Konfigurasi Upstream Failover pada geto (192.221.4.3)
+# ==============================================================================
+setup_geto() {
+    echo "[*] Mengonfigurasi parameter failover dan backup server pada geto..."
     cat << 'EOF' > /etc/nginx/sites-available/loadbalancer.conf
 upstream api_cluster {
     server 192.221.4.6:80 weight=3 max_fails=2 fail_timeout=5s; # nanami
@@ -35,14 +39,34 @@ server {
     }
 }
 EOF
+
+    nginx -t
     service nginx restart 2>/dev/null || /etc/init.d/nginx restart 2>/dev/null || nginx -s reload 2>/dev/null || true
-    echo "[✓] Geto failover dan passive health check aktif!"
+    echo "[OK] Passive health check dan server backup pada geto aktif!"
+}
 
-elif [ "$NODE" = "kirara" ]; then
-    echo "[*] Memastikan layanan API kompatibel pada kirara..."
-    bash /root/kirara.sh
-    echo "[✓] Kirara backup API worker siap melayani fallback!"
+# ==============================================================================
+# SECTION 2: Konfigurasi Server Cadangan pada kirara (192.221.4.8)
+# ==============================================================================
+setup_kirara() {
+    echo "[*] Memastikan kesiapan worker cadangan pada kirara..."
+    bash /root/kirara.sh 2>/dev/null || true
+    echo "[OK] Server backup kirara siap melayani fallback lalu lintas!"
+}
 
-else
-    echo "[!] Skrip Soal 18 ditujukan untuk node: geto dan kirara."
-fi
+# ==============================================================================
+# Dispatcher Eksekusi
+# ==============================================================================
+TARGET="${1:-$(hostname)}"
+case "$TARGET" in
+    "geto")
+        setup_geto
+        ;;
+    "kirara")
+        setup_kirara
+        ;;
+    *)
+        echo "[!] Skrip Soal 18 ditujukan untuk node: geto dan kirara."
+        echo "    Penggunaan: $0 [geto|kirara]"
+        ;;
+esac

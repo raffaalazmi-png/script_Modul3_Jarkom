@@ -1,17 +1,21 @@
 #!/bin/bash
 # ==============================================================================
 # Soal 16: Public Reverse Proxy (gojo) - Path-Based Routing
-# /    -> Forward ke maki & panda (Round Robin)
-# /api -> Forward ke geto (Internal Load Balancer)
+#
+# Reverse Proxy: gojo (192.221.1.4)
+# Rute Path:
+#   - Path /    -> Forward ke Frontend Workers (maki & panda) - Round Robin
+#   - Path /api -> Forward ke Internal Load Balancer (geto)
 # ==============================================================================
 set -e
 
-NODE=$(hostname)
-echo "[*] Menjalankan Soal 16 pada node: $NODE"
-echo "nameserver 192.168.122.1" > /etc/resolv.conf
-
-if [ "$NODE" = "gojo" ]; then
+# ==============================================================================
+# SECTION 1: Konfigurasi Path-Based Routing pada gojo (192.221.1.4)
+# ==============================================================================
+setup_gojo() {
     echo "[*] Mengonfigurasi Path-Based Routing pada gojo (192.221.1.4)..."
+    echo "nameserver 192.168.122.1" > /etc/resolv.conf
+
     apt-get update -y
     apt-get install -y nginx
 
@@ -27,9 +31,9 @@ upstream api_gateway {
 
 server {
     listen 80 default_server;
-    server_name jujutsu.k20.com www.jujutsu.k20.com jujutsu.k-20.com _;
+    server_name jujutsu.k20.com www.jujutsu.k20.com jujutsu.k-20.com www.jujutsu.k-20.com _;
 
-    # Path /api menuju geto
+    # Routing Path /api menuju internal load balancer (geto)
     location /api {
         proxy_pass http://api_gateway;
         proxy_set_header Host $host;
@@ -39,7 +43,7 @@ server {
         proxy_read_timeout 5s;
     }
 
-    # Root / menuju frontend maki & panda
+    # Routing Path / menuju frontend web worker (maki & panda)
     location / {
         proxy_pass http://frontend_workers;
         proxy_set_header Host $host;
@@ -53,8 +57,22 @@ EOF
 
     rm -f /etc/nginx/sites-enabled/default
     ln -sf /etc/nginx/sites-available/jujutsu.conf /etc/nginx/sites-enabled/jujutsu.conf
+
+    nginx -t
     service nginx restart 2>/dev/null || /etc/init.d/nginx restart 2>/dev/null || nginx -s reload 2>/dev/null || true
-    echo "[✓] Gojo Path-Based Routing berhasil dikonfigurasi!"
-else
-    echo "[!] Skrip Soal 16 ini ditujukan untuk node: gojo."
-fi
+    echo "[OK] Path-Based Routing pada gojo berhasil dikonfigurasi!"
+}
+
+# ==============================================================================
+# Dispatcher Eksekusi
+# ==============================================================================
+TARGET="${1:-$(hostname)}"
+case "$TARGET" in
+    "gojo")
+        setup_gojo
+        ;;
+    *)
+        echo "[!] Skrip Soal 16 ditujukan untuk node: gojo."
+        echo "    Penggunaan: $0 gojo"
+        ;;
+esac

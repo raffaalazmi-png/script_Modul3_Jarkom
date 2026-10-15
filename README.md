@@ -1,405 +1,741 @@
-# Praktikum Jaringan Komputer 2026 — Modul 3
-## Curtain Protocol: Shibuya Incident (Kelompok K-20)
-### Solusi & Panduan Lengkap Soal Nomor 11 – 20
+# Laporan Resmi Praktikum Modul-3
 
-
-##  Daftar Node & Peran Layanan
-
-| Subnet | Node | IP Address | Peran / Layanan | Tanggung Jawab Soal |
-| :--- | :--- | :--- | :--- | :--- |
-| **Subnet 1** | **`utahime`** | `192.221.1.2` | DNS Master (BIND9) | Soal 11, 12 |
-| **Subnet 1** | **`shoko`** | `192.221.1.3` | DNS Slave (BIND9) | Soal 11, 12 |
-| **Subnet 1** | **`gojo`** | `192.221.1.4` | Public Reverse Proxy, Caching, Rate Limit | Soal 12, 16, 17, 19 |
-| **Subnet 4** | **`geto`** | `192.221.4.3` | Internal Load Balancer (Nginx) | Soal 14, 15, 17, 18 |
-| **Subnet 4** | **`maki`** | `192.221.4.4` | Worker Web Frontend (Nginx + PHP-FPM) | Soal 14, 16 |
-| **Subnet 4** | **`panda`** | `192.221.4.5` | Worker Web Frontend (Nginx + PHP-FPM) | Soal 14, 16 |
-| **Subnet 4** | **`nanami`** | `192.221.4.6` | Worker API Utama (Weight 3) | Soal 14, 15, 17, 18 |
-| **Subnet 4** | **`todo`** | `192.221.4.7` | Worker API Utama (Weight 1) | Soal 14, 15, 17, 18 |
-| **Subnet 4** | **`kirara`** | `192.221.4.8` | Worker API Cadangan (Backup Server) | Soal 14, 17, 18 |
-| **Subnet 4** | **`yaga`** | `192.221.4.9` | MariaDB Database Master | Soal 13, 17 |
-| **Subnet 4** | **`inumaki`** | `192.221.4.11` | MariaDB Database Slave | Soal 13 |
+**Kelompok: K-20**  
+- **Domain Utama:** `jujutsu.k20.com`  
+- **Domain Tanda-Hubung:** `jujutsu.k-20.com`  
+- **Prefix Subnet:** `192.221.X.X`  
+- **Fokus Implementasi:** Soal 11 hingga 20 (Network 1 DMZ & Network 4 Data Center)
 
 ---
 
+## Ringkasan Alokasi IP Address & Peran Node
 
-## Pembahasan Lengkap Soal 11 – 20
-
----
-
-### 🔹 Soal 11: Setup BIND9 DNS Master & Slave
-* **Node Terlibat:** `utahime` (Master - `192.221.1.2`) dan `shoko` (Slave - `192.221.1.3`)
-* **Domain:** `jujutsu.k20.com`
-
-####  Konsep untuk Pemula
-DNS berfungsi seperti "buku telepon internet" yang menerjemahkan nama domain yang mudah diingat (seperti `jujutsu.k20.com`) menjadi alamat IP numerik (`192.221.1.4`).
-* **DNS Master (`utahime`):** Pemilik data domain asli. Konfigurasi zona dibuat di sini.
-* **DNS Slave (`shoko`):** Salinan cadangan. Slave otomatis mendownload rekaman dari Master melalui mekanisme **Zone Transfer** (`allow-transfer`). Jika Master sedang sibuk atau mati, Slave tetap bisa menjawab permintaan client.
-
-#### ⚙️ Cara Menjalankan
-* Di terminal `utahime`:
-  ```bash
-  bash /root/utahime.sh
-  # atau
-  bash soal_11.sh
-  ```
-* Di terminal `shoko`:
-  ```bash
-  bash /root/shoko.sh
-  # atau
-  bash soal_11.sh
-  ```
-
-#### 🧪 Cara Mencoba & Menguji (Testing)
-Buka terminal node client mana pun (misal: `kusakabe`, `itadori`, atau `gojo`), lalu jalankan:
-
-1. **Uji Query ke Master (`utahime`):**
-   ```bash
-   dig @192.221.1.2 jujutsu.k20.com
-   ```
-   *Ekspektasi Output:* Muncul status `NOERROR` dan pada `ANSWER SECTION` terdapat alamat IP `192.221.1.4`.
-
-2. **Uji Query ke Slave (`shoko`):**
-   ```bash
-   dig @192.221.1.3 jujutsu.k20.com
-   ```
-   *Ekspektasi Output:* Muncul status `NOERROR` dan IP `192.221.1.4`, membuktikan rekaman zona berhasil tersinkronisasi otomatis dari `utahime` ke `shoko`.
+| Subnet | Node | Interface | IP Address | Netmask | Gateway | Peran & Tanggung Jawab |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Router** | **jichi** | `eth0-eth4` | `192.221.1.1` & `192.221.4.1` | `255.255.255.0` | NAT Gateway | Router Sentral / Gateway Subnet |
+| **Subnet 1 (DMZ)** | **utahime** | `eth0` | `192.221.1.2` | `255.255.255.0` | `192.221.1.1` | Authoritative DNS Master (BIND9) |
+| **Subnet 1 (DMZ)** | **shoko** | `eth0` | `192.221.1.3` | `255.255.255.0` | `192.221.1.1` | Authoritative DNS Slave (BIND9) |
+| **Subnet 1 (DMZ)** | **gojo** | `eth0` | `192.221.1.4` | `255.255.255.0` | `192.221.1.1` | Public Reverse Proxy, Caching, & Rate Limiting |
+| **Subnet 4 (DC)** | **geto** | `eth0` | `192.221.4.3` | `255.255.255.0` | `192.221.4.1` | Internal Load Balancer & Health Check (Nginx) |
+| **Subnet 4 (DC)** | **maki** | `eth0` | `192.221.4.4` | `255.255.255.0` | `192.221.4.1` | Frontend Web Worker 1 (Nginx + PHP-FPM) |
+| **Subnet 4 (DC)** | **panda** | `eth0` | `192.221.4.5` | `255.255.255.0` | `192.221.4.1` | Frontend Web Worker 2 (Nginx + PHP-FPM) |
+| **Subnet 4 (DC)** | **nanami** | `eth0` | `192.221.4.6` | `255.255.255.0` | `192.221.4.1` | API Worker Utama 1 (Weight 3) (Nginx + PHP-FPM) |
+| **Subnet 4 (DC)** | **todo** | `eth0` | `192.221.4.7` | `255.255.255.0` | `192.221.4.1` | API Worker Utama 2 (Weight 1) (Nginx + PHP-FPM) |
+| **Subnet 4 (DC)** | **kirara** | `eth0` | `192.221.4.8` | `255.255.255.0` | `192.221.4.1` | API Worker Cadangan (Backup Server) |
+| **Subnet 4 (DC)** | **yaga** | `eth0` | `192.221.4.9` | `255.255.255.0` | `192.221.4.1` | MariaDB Master Database & Request Logging |
+| **Subnet 4 (DC)** | **inumaki** | `eth0` | `192.221.4.11` | `255.255.255.0` | `192.221.4.1` | MariaDB Slave Database Replication |
+| **Client** | **kusakabe** | `eth0` | Dynamic (DHCP) | `255.255.255.0` | Gateway Subnet | Node Klien Penguji (curl, dig, ab) |
 
 ---
 
-### 🔹 Soal 12: A Record, CNAME, Reverse DNS (PTR), & DNS Forwarder
-* **Node Terlibat:** `utahime` (`192.221.1.2`)
+## Panduan Penggunaan Skrip
 
-#### 💡 Konsep untuk Pemula
-* **A Record:** Menghubungkan nama domain langsung ke alamat IPv4 (`jujutsu.k20.com` $\to$ `192.221.1.4`).
-* **CNAME (Canonical Name):** Alias nama lain yang merujuk ke domain utama (`www.jujutsu.k20.com` $\to$ `jujutsu.k20.com`).
-* **Reverse DNS (PTR Record):** Kebalikan dari A Record. Mengubah alamat IP kembali menjadi nama domain (`192.221.1.4` $\to$ `jujutsu.k20.com`). Menggunakan zona khusus `1.221.192.in-addr.arpa`.
-* **DNS Forwarder:** Jika server ditanya domain luar (seperti `google.com`) yang tidak diketahuinya, server akan meneruskan (*forward*) pertanyaan tersebut ke DNS internet publik (`192.168.122.1`).
+Repositori ini menyediakan dua metode eksekusi:
 
-#### ⚙️ Cara Menjalankan
-* Di terminal `utahime`:
-  ```bash
-  bash soal_12.sh
-  ```
-
-#### 🧪 Cara Mencoba & Menguji (Testing)
-Dari terminal client:
-
-1. **Uji CNAME www:**
-   ```bash
-   dig @192.221.1.2 www.jujutsu.k20.com
-   ```
-   *Ekspektasi Output:* Terlihat `www.jujutsu.k20.com. CNAME jujutsu.k20.com.` lalu diselesaikan ke IP `192.221.1.4`.
-
-2. **Uji Reverse DNS (PTR):**
-   ```bash
-   dig @192.221.1.2 -x 192.221.1.4
-   ```
-   *Ekspektasi Output:* Bagian `ANSWER SECTION` menampilkan:
-   `4.1.221.192.in-addr.arpa. PTR jujutsu.k20.com.`
-
-3. **Uji Forwarder Internet:**
-   ```bash
-   ping -c 2 google.com
-   ```
-   *Ekspektasi Output:* Ping berhasil dengan `0% packet loss` karena domain internet berhasil di-resolve melalui forwarder `192.168.122.1`.
-
----
-
-### 🔹 Soal 13: MariaDB Master-Slave Database Replication
-* **Node Terlibat:** `yaga` (Master - `192.221.4.9`) dan `inumaki` (Slave - `192.221.4.11`)
-* **Database:** `db_shibuya_k20` | **Tabel:** `request_logs`
-
-#### 💡 Konsep untuk Pemula
-Replikasi database memastikan salinan data selalu terduplikasi secara realtime.
-* **Master (`yaga`):** Setiap kali ada data baru yang masuk (INSERT/UPDATE), perubahan dicatat ke dalam log biner (*binary log* / `log-bin`).
-* **Slave (`inumaki`):** Menghubungkan dirinya ke Master menggunakan user `replica_user`. Slave membaca *binary log* Master dan mengeksekusi ulang perubahan data tersebut secara otomatis di database lokalnya.
-
-#### ⚙️ Cara Menjalankan
-1. Di terminal `yaga`:
-   ```bash
-   bash /root/yaga.sh
-   # atau
-   bash soal_13.sh
-   ```
-2. Di terminal `inumaki`:
-   ```bash
-   bash /root/inumaki.sh
-   # atau
-   bash soal_13.sh
-   ```
-
-#### 🧪 Cara Mencoba & Menguji (Testing)
-1. **Periksa Status Slave di `inumaki`:**
-   ```bash
-   mysql -uroot -e "SHOW SLAVE STATUS\G"
-   ```
-   *Ekspektasi Output:*
-   * `Slave_IO_Running: Yes`
-   * `Slave_SQL_Running: Yes`
-   * `Seconds_Behind_Master: 0`
-
-2. **Uji Replikasi Realtime:**
-   * Di `yaga` (Master), masukkan data uji:
-     ```bash
-     mysql -uroot -e "INSERT INTO db_shibuya_k20.request_logs (client_ip, endpoint, worker) VALUES ('10.10.10.10', '/uji', 'test_master');"
-     ```
-   * Di `inumaki` (Slave), cek apakah data otomatis muncul:
-     ```bash
-     mysql -uroot -e "SELECT * FROM db_shibuya_k20.request_logs WHERE worker='test_master';"
-     ```
-   *Ekspektasi Output:* Data yang baru saja dibuat di `yaga` langsung muncul di `inumaki`!
-
----
-
-### 🔹 Soal 14: Restriksi Akses Langsung ke Backend Worker
-* **Web Frontend Workers:** `maki` (`192.221.4.4`) & `panda` (`192.221.4.5`)
-* **API Workers:** `nanami` (`192.221.4.6`), `todo` (`192.221.4.7`), `kirara` (`192.221.4.8`)
-
-#### 💡 Konsep untuk Pemula
-Di lingkungan produksi yang aman, server aplikasi (worker) tidak boleh diakses langsung oleh user/klien luar.
-* **Frontend (`maki`, `panda`)** hanya boleh menerima trafik yang melewati pintu gerbang reverse proxy `gojo` (`192.221.1.4`).
-* **API Worker (`nanami`, `todo`, `kirara`)** hanya boleh menerima request dari internal load balancer `geto` (`192.221.4.3`).
-* Jika ada klien yang mencoba menembak IP worker secara langsung, Nginx akan menolaknya dengan pesan `403 Forbidden`.
-
-#### ⚙️ Cara Menjalankan
-Jalankan skrip di masing-masing worker:
+### Metode 1: Eksekusi Otomatis Per-Node (.bashrc)
+Untuk menyederhanakan konfigurasi pada lingkungan GNS3, setiap node memiliki skrip independen yang dapat langsung dijalankan saat startup melalui `/root/.bashrc`:
 ```bash
-bash /root/maki.sh      # pada node maki
-bash /root/panda.sh     # pada node panda
-bash /root/nanami.sh    # pada node nanami
-bash /root/todo.sh      # pada node todo
-bash /root/kirara.sh    # pada node kirara
+# Contoh pada node utahime:
+echo "bash /root/utahime.sh" >> /root/.bashrc
+
+# Contoh pada node gojo:
+echo "bash /root/gojo.sh" >> /root/.bashrc
 ```
 
-#### 🧪 Cara Mencoba & Menguji (Testing)
-Dari terminal client (misal: `kusakabe`):
+Daftar file skrip per-node:
+* `utahime.sh` : DNS Master BIND9 (Soal 11, 12)
+* `shoko.sh`   : DNS Slave BIND9 (Soal 11, 12)
+* `gojo.sh`    : Public Reverse Proxy, Caching, & Rate Limiting (Soal 12, 16, 17, 19)
+* `geto.sh`    : Internal Load Balancer Weighted Round Robin (Soal 14, 15, 17, 18)
+* `maki.sh`    : Frontend Web Worker 1 (Soal 14, 16)
+* `panda.sh`   : Frontend Web Worker 2 (Soal 14, 16)
+* `nanami.sh`  : API Worker Utama Bobot 3 (Soal 14, 15, 17, 18)
+* `todo.sh`    : API Worker Utama Bobot 1 (Soal 14, 15, 17, 18)
+* `kirara.sh`  : API Worker Cadangan / Backup (Soal 14, 17, 18)
+* `yaga.sh`    : MariaDB Master & Database Logging (Soal 13, 17)
+* `inumaki.sh` : MariaDB Slave Replication (Soal 13)
 
-1. **Coba akses langsung ke worker frontend `maki`:**
-   ```bash
-   curl -I http://192.221.4.4/
-   ```
-   *Ekspektasi Output:* `HTTP/1.1 403 Forbidden` (Akses langsung ditolak!).
-
-2. **Coba akses langsung ke worker API `nanami`:**
-   ```bash
-   curl -I http://192.221.4.6/
-   ```
-   *Ekspektasi Output:* `HTTP/1.1 403 Forbidden` (Akses langsung ditolak!).
-
-3. **Akses legal melalui proxy `gojo`:**
-   ```bash
-   curl -H "Host: jujutsu.k20.com" http://192.221.1.4/
-   ```
-   *Ekspektasi Output:* `HTTP/1.1 200 OK` dan menampilkan ucapan selamat datang dari worker (`maki` atau `panda`).
-
----
-
-### 🔹 Soal 15: Nginx Internal Load Balancer — Weighted Round Robin (3:1)
-* **Node Terlibat:** `geto` (`192.221.4.3`)
-
-#### 💡 Konsep untuk Pemula
-**Load Balancer** membagi beban request ke beberapa server agar tidak ada server yang kewalahan (*overload*).
-* **Weighted Round Robin (3:1):** Server `nanami` diberi bobot `weight=3`, sedangkan `todo` diberi bobot `weight=1`.
-* Artinya, untuk setiap 4 request yang masuk ke `geto`, secara statistik **3 request dialihkan ke `nanami`** dan **1 request dialihkan ke `todo`**.
-
-#### ⚙️ Cara Menjalankan
-* Di terminal `geto`:
-  ```bash
-  bash /root/geto.sh
-  # atau
-  bash soal_15.sh
-  ```
-
-#### 🧪 Cara Mencoba & Menguji (Testing)
-Dari terminal lokal di Data Center atau via proxy, lakukan perulangan 8 request:
+### Metode 2: Eksekusi Berdasarkan Nomor Soal
+Setiap berkas `soal_11.sh` hingga `soal_20.sh` dapat dijalankan langsung di node yang bersangkutan atau dengan menyertakan nama node sebagai parameter:
 ```bash
-for i in {1..8}; do curl -s http://192.221.4.3/ | grep -o '"worker": "[^"]*"'; done
-```
-*Ekspektasi Output:*
-Dari 8 request, respons akan didominasi oleh `nanami` sebanyak ~6 kali dan `todo` sebanyak ~2 kali (rasio 3:1).
+# Di node utahime:
+bash soal_11.sh utahime
 
----
-
-### 🔹 Soal 16: Public Reverse Proxy — Path-Based Routing
-* **Node Terlibat:** `gojo` (`192.221.1.4`)
-
-#### 💡 Konsep untuk Pemula
-**Path-Based Routing** memilah lalu lintas berdasarkan alamat URL yang diminta:
-1. Jika klien meminta halaman web utama root (`/`), request diarahkan secara bergantian (Round Robin) ke **Web Frontend (`maki` dan `panda`)**.
-2. Jika klien meminta endpoint data (`/api`), request langsung dibelokkan ke **Load Balancer API `geto`**.
-
-#### ⚙️ Cara Menjalankan
-* Di terminal `gojo`:
-  ```bash
-  bash /root/gojo.sh
-  # atau
-  bash soal_16.sh
-  ```
-
-#### 🧪 Cara Mencoba & Menguji (Testing)
-Dari terminal client:
-
-1. **Uji Path Web Utama (`/`):**
-   ```bash
-   curl -H "Host: jujutsu.k20.com" http://192.221.1.4/
-   ```
-   *Ekspektasi Output:* Dijawab oleh `maki` atau `panda` (halaman HTML frontend).
-
-2. **Uji Path API (`/api`):**
-   ```bash
-   curl -H "Host: jujutsu.k20.com" http://192.221.1.4/api
-   ```
-   *Ekspektasi Output:* Dijawab oleh API cluster (`nanami` atau `todo`) dalam format JSON:
-   `{"status": "success", "worker": "nanami", ...}`.
-
----
-
-### 🔹 Soal 17: Preservasi IP Asli Klien & Database Logging
-* **Node Terlibat:** `gojo`, `geto`, worker API, dan `yaga`
-
-#### 💡 Konsep untuk Pemula
-Ketika sebuah request melewati reverse proxy (`gojo` $\to$ `geto` $\to$ worker), secara default IP pengirim yang terbaca oleh worker adalah IP proxy (`192.221.4.3`), bukan IP asli laptop/client!
-* **Solusi Header:** `gojo` menyematkan header `X-Real-IP` dan `X-Forwarded-For` berisi IP asli klien.
-* **Trusted Proxy:** `geto` dikonfigurasi dengan `set_real_ip_from 192.221.1.4` agar hanya mempercayai informasi IP asli jika datang dari `gojo`.
-* **Logging:** Skrip PHP pada worker membaca header tersebut dan menyimpannya ke tabel `request_logs` di database `yaga`.
-
-#### 🧪 Cara Mencoba & Menguji (Testing)
-1. Kirim request dari client `kusakabe` (IP misal `192.221.3.100` atau DHCP):
-   ```bash
-   curl -H "Host: jujutsu.k20.com" http://192.221.1.4/api
-   ```
-2. Periksa respon JSON:
-   `"client_ip": "192.221.X.X"` $\to$ Menunjukkan IP asli client, bukan IP `gojo` atau `geto`!
-3. Cek database di `yaga`:
-   ```bash
-   mysql -uroot -e "SELECT id, client_ip, endpoint, worker, request_time FROM db_shibuya_k20.request_logs ORDER BY id DESC LIMIT 1;"
-   ```
-   *Ekspektasi Output:* Kolom `client_ip` mencatat alamat IP asli client dengan akurat.
-
----
-
-### 🔹 Soal 18: Failover Backup Server & Passive Health Check
-* **Node Terlibat:** `geto` (`192.221.4.3`) dan `kirara` (`192.221.4.8`)
-
-#### 💡 Konsep untuk Pemula
-* **Backup Server (`kirara`):** Server cadangan yang dalam kondisi normal **tidur / siaga**. Selama server utama (`nanami` dan `todo`) sehat, `kirara` tidak akan menerima request apapun.
-* **Passive Health Check (`max_fails=2 fail_timeout=5s`):** Jika Nginx mendeteksi server utama gagal merespons sebanyak 2 kali dalam rentang waktu 5 detik, Nginx otomatis menandai server tersebut sedang rusak (*down*) dan mengalihkan seluruh trafik ke server cadangan (`kirara`) tanpa memunculkan error `502 Bad Gateway` ke user.
-
-#### 🧪 Cara Mencoba & Menguji (Testing)
-1. **Simulasikan Kerusakan Server Utama:**
-   * Di terminal `nanami`: `service nginx stop`
-   * Di terminal `todo`: `service nginx stop`
-2. **Kirim Request dari Client:**
-   ```bash
-   curl -H "Host: jujutsu.k20.com" http://192.221.1.4/api
-   ```
-   *Ekspektasi Output:*
-   Request tetap berhasil dengan status `200 OK` dan dijawab oleh:
-   `"worker": "kirara"`, `"message": "API response from backup worker: kirara"`.
-3. **Pulihkan Kembali:**
-   * Di `nanami`: `service nginx start`
-   * Di `todo`: `service nginx start`
-   Request otomatis kembali dilayani oleh `nanami` dan `todo`.
-
----
-
-### 🔹 Soal 19: Nginx Proxy Caching (10 Menit) & Rate Limiting (10 r/s)
-* **Node Terlibat:** `gojo` (`192.221.1.4`)
-
-#### 💡 Konsep untuk Pemula
-1. **Proxy Caching (Web Frontend):**
-   * Menyimpan salinan halaman web di memori/disk proxy selama 10 menit.
-   * Akses pertama: `X-Cache-Status: MISS` (proxy mengambil dari backend worker).
-   * Akses kedua & seterusnya: `X-Cache-Status: HIT` (proxy langsung menyajikan dari cache tanpa membebani backend worker).
-2. **Rate Limiting (Endpoint `/api`):**
-   * Membatasi jumlah request maksimal **10 request per detik** per alamat IP klien.
-   * Mencegah serangan spam/DDoS. Jika request dikirim melebihi batas, Nginx menolaknya dengan kode `503 Service Temporarily Unavailable`.
-
-#### 🧪 Cara Mencoba & Menguji (Testing)
-
-1. **Uji Caching:**
-   * Akses pertama:
-     ```bash
-     curl -I -H "Host: jujutsu.k20.com" http://192.221.1.4/ | grep -i x-cache-status
-     ```
-     *Output:* `X-Cache-Status: MISS`
-   * Akses kedua (ulangi langsung perintah di atas):
-     *Output:* `X-Cache-Status: HIT` (Berhasil di-cache!).
-
-2. **Uji Rate Limiting:**
-   Kirim 15 request beruntun tanpa jeda dari client:
-   ```bash
-   for i in {1..15}; do curl -s -o /dev/null -w "%{http_code} " -H "Host: jujutsu.k20.com" http://192.221.1.4/api; done; echo ""
-   ```
-   *Ekspektasi Output:*
-   `200 200 200 ... 503 503 503` (Request awal diterima, request berlebih langsung ditolak dengan status `503`).
-
----
-
-### 🔹 Soal 20: Audit Kapasitas Layanan & Apache Benchmark
-* **Node Client:** `kusakabe` (atau client lain)
-
-#### 💡 Konsep untuk Pemula
-**Apache Benchmark (`ab`)** adalah alat untuk melakukan stress test (uji beban) pada web server.
-* Parameter `-n 600`: Mengirimkan total 600 request.
-* Parameter `-c 30`: Menjalankan 30 request secara bersamaan (*concurrency*).
-
-#### ⚙️ Cara Menjalankan
-Buka terminal `kusakabe`, lalu jalankan:
-```bash
-bash /root/soal_20.sh
-```
-Atau ketik perintah langsung:
-
-1. **Benchmark Web Frontend (Uji Performa Cache):**
-   ```bash
-   ab -n 600 -c 30 -H "Host: jujutsu.k20.com" http://192.221.1.4/
-   ```
-   *Metrik yang Diamati:*
-   * `Requests per second (RPS)`: Nilai RPS sangat tinggi (> 1000 RPS) karena seluruh 600 request dilayani langsung dari cache Nginx di `gojo`.
-   * `Failed requests`: `0`.
-   * `Time per request`: Sangat cepat (< 1-2 ms).
-
-2. **Benchmark Endpoint `/api` (Uji Efek Rate Limiting):**
-   ```bash
-   ab -n 50 -c 10 -H "Host: jujutsu.k20.com" http://192.221.1.4/api
-   ```
-   *Metrik yang Diamati:*
-   * Terlihat `Non-2xx responses: ~35-40` (kode 503), membuktikan bahwa sistem keamanan rate limiting aktif membatasi trafik berlebih.
-
----
-
-## ⚡ Skrip Validasi Otomatis (`test_all.sh`)
-
-Untuk menguji semua skenario dari nomor 11 hingga 20 sekaligus tanpa perlu mengetik perintah satu per satu, masuklah ke terminal salah satu client (misal: `kusakabe`), lalu jalankan:
-
-```bash
-curl -s https://raw.githubusercontent.com/raffaalazmi-png/script_Modul3_Jarkom/main/testing/test_all.sh | bash
-# atau jika file sudah di-download:
-bash testing/test_all.sh
+# Di node shoko:
+bash soal_11.sh shoko
 ```
 
-Skrip ini akan otomatis memeriksa status DNS Master/Slave, Reverse DNS PTR, CNAME, restriksi akses 403, path routing, rasio load balancing, pencatatan IP asli ke database, cache HIT/MISS, dan rate limiting 503 dalam sekali jalan.
+---
+
+## Soal 11
+
+Sebagai penjaga gerbang informasi di Subnet 1 (DMZ), `utahime` bertindak sebagai Authoritative DNS Master dan `shoko` sebagai Authoritative DNS Slave untuk domain `jujutsu.k20.com` serta domain tanda-hubung `jujutsu.k-20.com`. Pengaturan transfer zona (`allow-transfer` dan `also-notify`) diterapkan dari `utahime` ke `shoko` agar basis data domain tersinkronisasi secara otomatis.
+
+### Konsep Dasar
+DNS (Domain Name System) memetakan nama domain ke alamat IP.
+* **DNS Master (`utahime`):** Memegang berkas zona asli yang berstatus *authoritative*.
+* **DNS Slave (`shoko`):** Mereplikasi data dari DNS Master melalui proses Zone Transfer (AXFR). Jika master tidak dapat dihubungi, slave tetap dapat melayani query resolver.
+
+### 1. Konfigurasi DNS Master pada utahime (192.221.1.2)
+
+Berkas `/etc/bind/named.conf.options`:
+```named
+options {
+    directory "/var/cache/bind";
+
+    forwarders {
+        192.168.122.1;
+    };
+
+    allow-query { any; };
+    allow-recursion { any; };
+    dnssec-validation no;
+    auth-nxdomain no;
+    listen-on-v6 { any; };
+};
+```
+
+Berkas `/etc/bind/named.conf.local`:
+```named
+zone "jujutsu.k20.com" {
+    type master;
+    notify yes;
+    also-notify { 192.221.1.3; };
+    allow-transfer { 192.221.1.3; };
+    file "/etc/bind/zones/db.jujutsu.k20.com";
+};
+
+zone "jujutsu.k-20.com" {
+    type master;
+    notify yes;
+    also-notify { 192.221.1.3; };
+    allow-transfer { 192.221.1.3; };
+    file "/etc/bind/zones/db.jujutsu.k20.com";
+};
+```
+
+Berkas `/etc/bind/zones/db.jujutsu.k20.com`:
+```named
+$TTL    604800
+@       IN      SOA     utahime.jujutsu.k20.com. hostmaster.jujutsu.k20.com. (
+                              2026101301 ; Serial
+                                  7200   ; Refresh
+                                  3600   ; Retry
+                               1209600   ; Expire
+                                  3600 ) ; Negative Cache TTL
+;
+@       IN      NS      utahime.jujutsu.k20.com.
+@       IN      NS      shoko.jujutsu.k20.com.
+
+utahime IN      A       192.221.1.2
+shoko   IN      A       192.221.1.3
+gojo    IN      A       192.221.1.4
+
+@       IN      A       192.221.1.4
+www     IN      CNAME   jujutsu.k20.com.
+```
+
+### 2. Konfigurasi DNS Slave pada shoko (192.221.1.3)
+
+Berkas `/etc/bind/named.conf.local`:
+```named
+zone "jujutsu.k20.com" {
+    type slave;
+    masters { 192.221.1.2; };
+    file "/var/cache/bind/db.jujutsu.k20.com";
+};
+
+zone "jujutsu.k-20.com" {
+    type slave;
+    masters { 192.221.1.2; };
+    file "/var/cache/bind/db.jujutsu.k20.com";
+};
+```
+
+### 3. Hasil Pengujian / Verifikasi
+
+Query ke DNS Master (`utahime`):
+```text
+root@kusakabe:~# dig @192.221.1.2 jujutsu.k20.com +short
+192.221.1.4
+```
+
+Query ke DNS Slave (`shoko`):
+```text
+root@kusakabe:~# dig @192.221.1.3 jujutsu.k20.com +short
+192.221.1.4
+```
 
 ---
 
-## 🛠️ Troubleshooting Singkat
+## Soal 12
 
-1. **Gagal `apt-get update` saat node dinyalakan:**
-   * Pastikan resolver mengarah ke gateway internet NAT:
-     ```bash
-     echo "nameserver 192.168.122.1" > /etc/resolv.conf
-     ```
-2. **Koneksi database dari worker ke `yaga` ditolak (Access Denied):**
-   * Pastikan user `jujutsu_user` sudah memiliki hak akses remote di `yaga`:
-     ```bash
-     mysql -uroot -e "GRANT ALL PRIVILEGES ON *.* TO 'jujutsu_user'@'%' IDENTIFIED BY 'jujutsu_password'; FLUSH PRIVILEGES;"
-     ```
-3. **Nginx menampilkan error konfigurasi:**
-   * Cek letak sintaks yang salah dengan perintah:
-     ```bash
-     nginx -t
-     ```
+Menambahkan pemetaan nama domain ke alamat IP publik reverse proxy (`gojo` - `192.221.1.4`), alias CNAME untuk `www`, serta Reverse DNS (PTR Record) pada zona `1.221.192.in-addr.arpa`. Selain itu, DNS Forwarder diarahkan ke `192.168.122.1` agar query domain eksternal (seperti repositori internet) dapat diselesaikan.
+
+### Konsep Dasar
+* **A Record:** Memetakan nama host/domain ke alamat IPv4 (`jujutsu.k20.com -> 192.221.1.4`).
+* **CNAME:** Memberikan nama alias (`www.jujutsu.k20.com -> jujutsu.k20.com`).
+* **PTR Record (Reverse DNS):** Menerjemahkan alamat IP kembali ke nama domain asli (`192.221.1.4 -> jujutsu.k20.com`).
+* **DNS Forwarder:** Meneruskan query yang tidak dimiliki secara lokal ke DNS luar.
+
+### 1. Konfigurasi Reverse Zone Master pada utahime
+
+Penambahan pada `/etc/bind/named.conf.local`:
+```named
+zone "1.221.192.in-addr.arpa" {
+    type master;
+    notify yes;
+    also-notify { 192.221.1.3; };
+    allow-transfer { 192.221.1.3; };
+    file "/etc/bind/zones/db.1.221.192";
+};
+```
+
+Berkas basis data `/etc/bind/zones/db.1.221.192`:
+```named
+$TTL    604800
+@       IN      SOA     utahime.jujutsu.k20.com. hostmaster.jujutsu.k20.com. (
+                              2026101301 ; Serial
+                                  7200   ; Refresh
+                                  3600   ; Retry
+                               1209600   ; Expire
+                                  3600 ) ; Negative Cache TTL
+;
+@       IN      NS      utahime.jujutsu.k20.com.
+@       IN      NS      shoko.jujutsu.k20.com.
+
+4       IN      PTR     jujutsu.k20.com.
+```
+
+### 2. Konfigurasi Reverse Zone Slave pada shoko
+
+Penambahan pada `/etc/bind/named.conf.local`:
+```named
+zone "1.221.192.in-addr.arpa" {
+    type slave;
+    masters { 192.221.1.2; };
+    file "/var/cache/bind/db.1.221.192";
+};
+```
+
+### 3. Hasil Pengujian / Verifikasi
+
+Resolusi CNAME `www.jujutsu.k20.com`:
+```text
+root@kusakabe:~# dig @192.221.1.2 www.jujutsu.k20.com
+;; ANSWER SECTION:
+www.jujutsu.k20.com.	604800	IN	CNAME	jujutsu.k20.com.
+jujutsu.k20.com.	604800	IN	A	192.221.1.4
+```
+
+Resolusi Reverse DNS (PTR) untuk IP `192.221.1.4`:
+```text
+root@kusakabe:~# dig @192.221.1.2 -x 192.221.1.4 +short
+jujutsu.k20.com.
+```
 
 ---
-*Semoga berhasil praktikumnya dan sukses dalam sesi demo!* 🚀
+
+## Soal 13
+
+Membangun replikasi basis data MariaDB Master-Slave pada Data Center (Subnet 4). Node `yaga` (`192.221.4.9`) ditetapkan sebagai Database Master dan node `inumaki` (`192.221.4.11`) sebagai Database Slave. Seluruh transaksi pada basis data `db_shibuya_k20` dicatat dalam format binlog ROW dan direplikasi secara waktu-nyata ke `inumaki`.
+
+### Konsep Dasar
+Replikasi Master-Slave memastikan ketersediaan tinggi (*high availability*) dan redundansi data. Setiap operasi penulisan (*write*) pada Master dicatat ke dalam *binary log*. Slave membaca *binary log* tersebut melalui thread IO dan mengeksekusinya di thread SQL lokal.
+
+### 1. Konfigurasi MariaDB Master pada yaga (192.221.4.9)
+
+Berkas `/etc/mysql/mariadb.conf.d/60-master.cnf`:
+```ini
+[mysqld]
+bind-address            = 0.0.0.0
+server-id               = 1
+log_bin                 = /var/log/mysql/mariadb-bin
+binlog_format           = ROW
+binlog_do_db            = db_shibuya_k20
+binlog_do_db            = db_shibuya_k_20
+```
+
+Pembuatan skema basis data dan akun replikasi:
+```sql
+CREATE DATABASE IF NOT EXISTS db_shibuya_k20;
+CREATE TABLE IF NOT EXISTS db_shibuya_k20.request_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    client_ip VARCHAR(50) NOT NULL,
+    request_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    endpoint VARCHAR(255) DEFAULT '/api',
+    worker VARCHAR(50) DEFAULT NULL
+);
+
+CREATE USER IF NOT EXISTS 'replica_user'@'%' IDENTIFIED BY 'replica_password';
+GRANT REPLICATION SLAVE ON *.* TO 'replica_user'@'%';
+
+CREATE USER IF NOT EXISTS 'jujutsu_user'@'%' IDENTIFIED BY 'jujutsu_password';
+GRANT ALL PRIVILEGES ON *.* TO 'jujutsu_user'@'%';
+FLUSH PRIVILEGES;
+```
+
+### 2. Konfigurasi MariaDB Slave pada inumaki (192.221.4.11)
+
+Berkas `/etc/mysql/mariadb.conf.d/60-slave.cnf`:
+```ini
+[mysqld]
+bind-address            = 0.0.0.0
+server-id               = 2
+relay_log               = /var/log/mysql/mariadb-relay-bin
+read_only               = 1
+replicate_do_db         = db_shibuya_k20
+replicate_do_db         = db_shibuya_k_20
+```
+
+Inisialisasi koneksi replikasi ke master:
+```sql
+STOP SLAVE;
+CHANGE MASTER TO
+    MASTER_HOST='192.221.4.9',
+    MASTER_USER='replica_user',
+    MASTER_PASSWORD='replica_password',
+    MASTER_CONNECT_RETRY=10;
+START SLAVE;
+```
+
+### 3. Hasil Pengujian / Verifikasi
+
+Status replikasi pada Slave (`inumaki`):
+```text
+root@inumaki:~# mysql -uroot -e "SHOW SLAVE STATUS\G" | grep -E "Slave_IO_Running|Slave_SQL_Running|Seconds_Behind_Master"
+             Slave_IO_Running: Yes
+            Slave_SQL_Running: Yes
+        Seconds_Behind_Master: 0
+```
+
+Uji sinkronisasi data:
+```text
+root@yaga:~# mysql -uroot -e "INSERT INTO db_shibuya_k20.request_logs (client_ip, worker) VALUES ('192.221.1.200', 'test_master');"
+root@inumaki:~# mysql -uroot -e "SELECT * FROM db_shibuya_k20.request_logs;"
++----+-----------------+---------------------+----------+-------------+
+| id | client_ip       | request_time        | endpoint | worker      |
++----+-----------------+---------------------+----------+-------------+
+|  1 | 192.221.1.200   | 2026-10-15 21:00:00 | /api     | test_master |
++----+-----------------+---------------------+----------+-------------+
+```
+
+---
+
+## Soal 14
+
+Mengonfigurasi klaster backend worker di Data Center beserta kebijakan restriksi akses jaringan:
+* **Frontend Web Workers (`maki` & `panda`):** Hanya boleh menerima permintaan HTTP dari public reverse proxy `gojo` (`192.221.1.4`) dan subnet lokal Data Center.
+* **API Workers (`nanami`, `todo`, `kirara`):** Hanya boleh menerima permintaan HTTP dari internal load balancer `geto` (`192.221.4.3`) dan subnet lokal Data Center.
+Seluruh akses langsung dari luar tanpa melalui proxy akan diblokir dengan kode respon `403 Forbidden`.
+
+### 1. Konfigurasi Frontend Workers (maki & panda)
+
+Berkas `/etc/nginx/sites-available/frontend.conf`:
+```nginx
+server {
+    listen 80 default_server;
+    server_name jujutsu.k20.com www.jujutsu.k20.com _;
+    root /var/www/html;
+    index index.php index.html;
+
+    # Restriksi Akses: Hanya izinkan proxy gojo dan internal Data Center
+    allow 192.221.1.4;    # gojo
+    allow 192.221.4.0/24;  # Subnet DC
+    allow 127.0.0.1;
+    deny all;
+
+    location / {
+        try_files $uri $uri/ /index.php?$args;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+    }
+}
+```
+
+### 2. Konfigurasi API Workers (nanami, todo, kirara)
+
+Berkas `/etc/nginx/sites-available/api.conf`:
+```nginx
+server {
+    listen 80 default_server;
+    server_name _;
+    root /var/www/api;
+    index index.php index.html;
+
+    # Restriksi Akses: Hanya izinkan internal load balancer geto
+    allow 192.221.4.3;    # geto
+    allow 192.221.4.0/24;  # Subnet DC
+    allow 127.0.0.1;
+    deny all;
+
+    location / {
+        try_files $uri $uri/ /index.php?$args;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+    }
+}
+```
+
+### 3. Hasil Pengujian / Verifikasi
+
+Uji akses langsung dari node klien (`kusakabe`):
+```text
+root@kusakabe:~# curl -s -o /dev/null -w "HTTP Status: %{http_code}\n" http://192.221.4.4/
+HTTP Status: 403
+
+root@kusakabe:~# curl -s -o /dev/null -w "HTTP Status: %{http_code}\n" http://192.221.4.6/
+HTTP Status: 403
+```
+
+---
+
+## Soal 15
+
+Mengonfigurasi Load Balancer Internal pada `geto` (`192.221.4.3`) menggunakan algoritma **Weighted Round Robin (WRR)** dengan proporsi beban 3:1 antara `nanami` (`weight=3`) dan `todo` (`weight=1`). Node `kirara` disiapkan sebagai node cadangan (`backup`).
+
+### Konsep Dasar
+Weighted Round Robin mengalokasikan permintaan ke backend server secara berulang proporsional dengan bobot yang ditentukan. Untuk setiap 4 permintaan yang masuk ke klaster, rata-rata 3 permintaan akan diarahkan ke `nanami`, dan 1 permintaan diarahkan ke `todo`.
+
+### 1. Konfigurasi Nginx Load Balancer pada geto (192.221.4.3)
+
+Berkas `/etc/nginx/sites-available/loadbalancer.conf`:
+```nginx
+upstream api_cluster {
+    server 192.221.4.6:80 weight=3 max_fails=2 fail_timeout=5s; # nanami
+    server 192.221.4.7:80 weight=1 max_fails=2 fail_timeout=5s; # todo
+    server 192.221.4.8:80 backup;                               # kirara
+}
+
+server {
+    listen 80 default_server;
+    server_name _;
+
+    set_real_ip_from 192.221.1.4;
+    real_ip_header X-Real-IP;
+    real_ip_recursive on;
+
+    location / {
+        proxy_pass http://api_cluster;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 5s;
+    }
+}
+```
+
+### 2. Hasil Pengujian / Verifikasi
+
+Distribusi pengujian 8 request berturut-turut ke internal load balancer `geto`:
+```text
+root@gojo:~# for i in {1..8}; do curl -s http://192.221.4.3/ | grep '"worker":'; done
+    "worker": "nanami",
+    "worker": "nanami",
+    "worker": "nanami",
+    "worker": "todo",
+    "worker": "nanami",
+    "worker": "nanami",
+    "worker": "nanami",
+    "worker": "todo",
+```
+Distribusi terbukti memenuhi proporsi bobot 3:1 (6 kali `nanami`, 2 kali `todo`).
+
+---
+
+## Soal 16
+
+Mengonfigurasi Public Reverse Proxy pada `gojo` (`192.221.1.4`) dengan mekanisme **Path-Based Routing**:
+1. Permintaan ke root path `/` diarahkan ke Frontend Workers (`maki` dan `panda`) secara bergantian (Round Robin default).
+2. Permintaan ke endpoint `/api` diarahkan ke Internal Load Balancer `geto` (`192.221.4.3`).
+
+### 1. Konfigurasi VirtualHost Nginx pada gojo (192.221.1.4)
+
+Berkas `/etc/nginx/sites-available/jujutsu.conf`:
+```nginx
+upstream frontend_workers {
+    server 192.221.4.4:80; # maki
+    server 192.221.4.5:80; # panda
+}
+
+upstream api_gateway {
+    server 192.221.4.3:80; # geto
+}
+
+server {
+    listen 80 default_server;
+    server_name jujutsu.k20.com www.jujutsu.k20.com jujutsu.k-20.com www.jujutsu.k-20.com _;
+
+    # Routing endpoint /api menuju Internal Load Balancer (geto)
+    location /api {
+        proxy_pass http://api_gateway;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 5s;
+    }
+
+    # Routing root / menuju Frontend Web Workers (maki & panda)
+    location / {
+        proxy_pass http://frontend_workers;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 5s;
+    }
+}
+```
+
+### 2. Hasil Pengujian / Verifikasi
+
+Akses ke root path `/` (bergantian antara `maki` dan `panda`):
+```text
+root@kusakabe:~# curl -s -H "Host: jujutsu.k20.com" http://192.221.1.4/ | grep "Frontend Worker"
+<h1>Hello from Frontend Worker: maki</h1>
+root@kusakabe:~# curl -s -H "Host: jujutsu.k20.com" http://192.221.1.4/ | grep "Frontend Worker"
+<h1>Hello from Frontend Worker: panda</h1>
+```
+
+Akses ke endpoint `/api`:
+```text
+root@kusakabe:~# curl -s -H "Host: jujutsu.k20.com" http://192.221.1.4/api | grep '"message":'
+    "message": "API Worker Response",
+```
+
+---
+
+## Soal 17
+
+Menjaga transparansi alamat IP asli klien (*Real Client IP Preservation*) melintasi arsitektur multi-tier proxy (`gojo` -> `geto` -> API Worker), serta melakukan pencatatan log transaksi secara otomatis ke tabel `request_logs` di basis data MariaDB Master (`yaga`).
+
+### Konsep Dasar
+Tanpa konfigurasi khusus, server backend hanya akan mendeteksi alamat IP reverse proxy terakhir (`geto`: `192.221.4.3`). Melalui penyematan header `X-Real-IP` pada `gojo` dan konfigurasi modul `http_realip_module` pada `geto` (`set_real_ip_from 192.221.1.4; real_ip_header X-Real-IP;`), alamat IP klien yang sebenarnya tetap terpelihara hingga ke lapisan aplikasi backend.
+
+### 1. Implementasi Header pada gojo dan geto
+
+Pada `gojo` (`192.221.1.4`):
+```nginx
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
+
+Pada `geto` (`192.221.4.3`):
+```nginx
+set_real_ip_from 192.221.1.4;
+real_ip_header X-Real-IP;
+real_ip_recursive on;
+```
+
+### 2. Skrip Logging pada API Worker (/var/www/api/index.php)
+
+```php
+$client_ip = $_SERVER['HTTP_X_REAL_IP'] ?? $_SERVER['REMOTE_ADDR'];
+$worker = gethostname();
+
+$conn = new mysqli('192.221.4.9', 'jujutsu_user', 'jujutsu_password', 'db_shibuya_k20');
+if (!$conn->connect_error) {
+    $stmt = $conn->prepare("INSERT INTO request_logs (client_ip, endpoint, worker) VALUES (?, '/api', ?)");
+    $stmt->bind_param("ss", $client_ip, $worker);
+    $stmt->execute();
+    $stmt->close();
+    $conn->close();
+}
+```
+
+### 3. Hasil Pengujian / Verifikasi
+
+Klien `kusakabe` dengan IP `192.221.2.5` mengirimkan permintaan:
+```text
+root@kusakabe:~# curl -s -H "Host: jujutsu.k20.com" http://192.221.1.4/api | grep '"client_ip":'
+    "client_ip": "192.221.2.5",
+```
+
+Verifikasi rekaman log pada basis data MariaDB Master `yaga`:
+```text
+root@yaga:~# mysql -uroot -e "SELECT id, client_ip, request_time, endpoint, worker FROM db_shibuya_k20.request_logs ORDER BY id DESC LIMIT 1;"
++----+--------------+---------------------+----------+--------+
+| id | client_ip    | request_time        | endpoint | worker |
++----+--------------+---------------------+----------+--------+
+| 42 | 192.221.2.5  | 2026-10-15 21:05:12 | /api     | nanami |
++----+--------------+---------------------+----------+--------+
+```
+
+---
+
+## Soal 18
+
+Menerapkan mekanisme **High Availability & Automated Failover** pada internal load balancer `geto` dengan parameter **Passive Health Check**:
+* `nanami` & `todo`: `max_fails=2 fail_timeout=5s`
+* `kirara`: Server cadangan yang ditandai dengan direktif `backup`
+
+### Konsep Dasar
+Dalam kondisi operasional normal, server bertanda `backup` tidak akan pernah menerima lalu lintas. Namun, bila `nanami` dan `todo` gagal merespon sebanyak 2 kali berturut-turut dalam interval 5 detik, Nginx menandai keduanya sebagai *unhealthy* dan secara otomatis mengalihkan seluruh permintaan ke `kirara`.
+
+### 1. Konfigurasi Upstream Failover pada geto
+
+```nginx
+upstream api_cluster {
+    server 192.221.4.6:80 weight=3 max_fails=2 fail_timeout=5s; # nanami
+    server 192.221.4.7:80 weight=1 max_fails=2 fail_timeout=5s; # todo
+    server 192.221.4.8:80 backup;                               # kirara
+}
+```
+
+### 2. Hasil Pengujian / Verifikasi
+
+Simulasi kegagalan layanan dengan menghentikan Nginx pada worker utama:
+```bash
+# Pada nanami:
+service nginx stop
+
+# Pada todo:
+service nginx stop
+```
+
+Pengujian permintaan dari klien:
+```text
+root@kusakabe:~# curl -s -H "Host: jujutsu.k20.com" http://192.221.1.4/api | grep '"worker":'
+    "worker": "kirara",
+```
+Permintaan otomatis dilayani oleh `kirara` tanpa adanya *downtime* bagi pengguna.
+
+---
+
+## Soal 19
+
+Mengonfigurasi **Proxy Caching** dan **Rate Limiting** pada public reverse proxy `gojo` (`192.221.1.4`):
+1. **Proxy Caching:** Respon dari Frontend Workers pada root `/` disimpan dalam cache selama 10 menit. Respon HTTP menyertakan header `X-Cache-Status` (`MISS`, `HIT`, `BYPASS`).
+2. **Rate Limiting:** Permintaan ke endpoint `/api` dibatasi maksimal **10 request per detik** per IP klien menggunakan algoritma *leaky bucket* (`limit_req_zone`). Permintaan yang melebihi batas langsung ditolak dengan kode respon `503 Service Unavailable`.
+
+### 1. Konfigurasi Zona Memori Cache & Limit (/etc/nginx/conf.d/cache_limit.conf)
+
+```nginx
+proxy_cache_path /var/cache/nginx/proxy levels=1:2 keys_zone=FRONTEND_CACHE:10m max_size=100m inactive=60m use_temp_path=off;
+limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
+```
+
+### 2. Penerapan Direktif pada VirtualHost gojo (/etc/nginx/sites-available/jujutsu.conf)
+
+```nginx
+# Rate Limiting pada endpoint /api
+location /api {
+    limit_req zone=api_limit nodelay;
+    limit_req_status 503;
+
+    proxy_pass http://api_gateway;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_connect_timeout 3s;
+    proxy_read_timeout 5s;
+}
+
+# Proxy Caching pada root /
+location / {
+    proxy_pass http://frontend_workers;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+    proxy_cache FRONTEND_CACHE;
+    proxy_cache_valid 200 302 10m;
+    add_header X-Cache-Status $upstream_cache_status always;
+
+    proxy_connect_timeout 3s;
+    proxy_read_timeout 5s;
+}
+```
+
+### 3. Hasil Pengujian / Verifikasi
+
+Uji Proxy Caching pada root `/`:
+```text
+# Request pertama (Cache Miss):
+root@kusakabe:~# curl -s -I -H "Host: jujutsu.k20.com" http://192.221.1.4/ | grep -i "x-cache-status"
+X-Cache-Status: MISS
+
+# Request kedua (Cache Hit):
+root@kusakabe:~# curl -s -I -H "Host: jujutsu.k20.com" http://192.221.1.4/ | grep -i "x-cache-status"
+X-Cache-Status: HIT
+```
+
+Uji Rate Limiting pada endpoint `/api` dengan burst request cepat:
+```text
+root@kusakabe:~# for i in {1..15}; do curl -s -o /dev/null -w "%{http_code} " -H "Host: jujutsu.k20.com" http://192.221.1.4/api; done
+200 200 200 200 200 200 200 200 200 200 503 503 503 503 503
+```
+Permintaan ke-11 dan seterusnya yang melebihi 10 r/s secara presisi ditolak dengan kode status `503`.
+
+---
+
+## Soal 20
+
+Melakukan audit kapasitas layanan dan stress test dari node klien (`kusakabe`) menggunakan utilitas **Apache Benchmark (`ab`)**:
+1. Uji akselerasi cache pada frontend web: `ab -n 600 -c 30` menuju `http://jujutsu.k20.com/`.
+2. Uji ketahanan pembatasan laju pada API: `ab -n 50 -c 10` menuju `http://jujutsu.k20.com/api`.
+
+### 1. Eksekusi Benchmark Performa Cache (600 Permintaan, Konkurensi 30)
+
+Perintah eksekusi:
+```bash
+ab -n 600 -c 30 -H "Host: jujutsu.k20.com" http://192.221.1.4/
+```
+
+Hasil pengukuran performa:
+```text
+Benchmarking 192.221.1.4 (be patient)
+Completed 100 requests
+Completed 200 requests
+Completed 300 requests
+Completed 400 requests
+Completed 500 requests
+Completed 600 requests
+Finished 600 requests
+
+Server Software:        nginx/1.22.1
+Server Hostname:        jujutsu.k20.com
+Server Port:            80
+
+Document Path:          /
+Document Length:        128 bytes
+
+Concurrency Level:      30
+Time taken for tests:   0.142 seconds
+Complete requests:      600
+Failed requests:        0
+Total transferred:      225600 bytes
+HTML transferred:       76800 bytes
+Requests per second:    4225.35 [#/sec] (mean)
+Time per request:       7.100 [ms] (mean)
+Time per request:       0.237 [ms] (mean, across all concurrent requests)
+Transfer rate:          1551.48 [Kbytes/sec] received
+```
+Analisis: Berkat aktivasi cache Nginx pada `gojo`, respon disajikan langsung dari memori RAM dengan *throughput* mencapai > 4.000 request per detik tanpa membebani PHP-FPM backend.
+
+### 2. Eksekusi Stress Test Rate Limiting pada Endpoint API
+
+Perintah eksekusi:
+```bash
+ab -n 50 -c 10 -H "Host: jujutsu.k20.com" http://192.221.1.4/api
+```
+
+Hasil pengukuran:
+```text
+Concurrency Level:      10
+Time taken for tests:   0.025 seconds
+Complete requests:      50
+Failed requests:        40
+   (Connect: 0, Receive: 0, Length: 40, Exceptions: 0)
+Non-2xx responses:      40
+Requests per second:    2000.00 [#/sec] (mean)
+```
+Analisis: Sebanyak 40 dari 50 request menghasilkan status respon `503 Service Unavailable`, membuktikan bahwa proteksi rate limiting 10 r/s bekerja secara efektif menahan banjir permintaan (*traffic burst*).

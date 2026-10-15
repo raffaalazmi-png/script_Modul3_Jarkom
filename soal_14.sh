@@ -1,17 +1,24 @@
 #!/bin/bash
 # ==============================================================================
 # Soal 14: Backend Workers (maki, panda, nanami, todo, kirara) & Access Restrictions
-# Frontend (maki, panda) hanya menerima trafik dari gojo (192.221.1.4)
-# API Worker (nanami, todo, kirara) hanya menerima trafik dari geto (192.221.4.3)
+#
+# Part 1: Frontend Workers (maki & panda)
+#         - Menyajikan aplikasi web beranda
+#         - Restriksi akses: Hanya menerima koneksi dari gojo (192.221.1.4)
+# Part 2: API Workers (nanami, todo, kirara)
+#         - Menyajikan endpoint layanan API
+#         - Restriksi akses: Hanya menerima koneksi dari geto (192.221.4.3)
 # ==============================================================================
 set -e
 
-NODE=$(hostname)
-echo "[*] Menjalankan Soal 14 pada node: $NODE"
-echo "nameserver 192.168.122.1" > /etc/resolv.conf
+# ==============================================================================
+# SECTION 1: Konfigurasi Frontend Worker (maki & panda)
+# ==============================================================================
+setup_frontend_worker() {
+    NODE_NAME="$1"
+    echo "[*] Menyiapkan Frontend Worker pada $NODE_NAME..."
+    echo "nameserver 192.168.122.1" > /etc/resolv.conf
 
-if [ "$NODE" = "maki" ] || [ "$NODE" = "panda" ]; then
-    echo "[*] Menyiapkan Frontend Worker pada $NODE..."
     apt-get update -y
     apt-get install -y nginx php-fpm php-cli
 
@@ -24,16 +31,17 @@ if [ "$NODE" = "maki" ] || [ "$NODE" = "panda" ]; then
     if [ -z "$PHP_SOCK" ]; then PHP_SOCK="/run/php/php-fpm.sock"; fi
 
     mkdir -p /var/www/html
-    cat << 'EOF' > /var/www/html/index.php
+    cat << EOF > /var/www/html/index.php
 <?php
-$hostname = gethostname();
-echo "<h1>Hello from Frontend Web Worker: " . htmlspecialchars($hostname) . "</h1>\n";
-echo "<p>Client IP: " . htmlspecialchars($_SERVER['HTTP_X_REAL_IP'] ?? $_SERVER['REMOTE_ADDR']) . "</p>\n";
+\$hostname = gethostname();
+\$client_ip = \$_SERVER['HTTP_X_REAL_IP'] ?? \$_SERVER['REMOTE_ADDR'];
+echo "<h1>Hello from Frontend Web Worker: " . htmlspecialchars(\$hostname) . "</h1>\n";
+echo "<p>Client IP: " . htmlspecialchars(\$client_ip) . "</p>\n";
 ?>
 EOF
     chown -R www-data:www-data /var/www/html
 
-    # Blokir akses langsung dari klien, hanya izinkan dari gojo (192.221.1.4)
+    # Konfigurasi VirtualHost dengan pembatasan akses ketat
     cat << EOF > /etc/nginx/sites-available/frontend.conf
 server {
     listen 80 default_server;
@@ -41,9 +49,9 @@ server {
     root /var/www/html;
     index index.php index.html;
 
-    # Restriksi akses Soal 14
-    allow 192.221.1.4;   # gojo
-    allow 192.221.4.0/24; # subnet internal DC
+    # Restriksi akses Soal 14: Hanya izinkan public reverse proxy gojo dan subnet lokal
+    allow 192.221.1.4;    # gojo
+    allow 192.221.4.0/24;  # Data Center internal subnet
     allow 127.0.0.1;
     deny all;
 
@@ -60,13 +68,22 @@ EOF
 
     rm -f /etc/nginx/sites-enabled/default
     ln -sf /etc/nginx/sites-available/frontend.conf /etc/nginx/sites-enabled/frontend.conf
-    service nginx restart 2>/dev/null || /etc/init.d/nginx restart 2>/dev/null || nginx -s reload 2>/dev/null || true
-    echo "[✓] Frontend worker $NODE berhasil diamankan dan berjalan!"
 
-elif [ "$NODE" = "nanami" ] || [ "$NODE" = "todo" ] || [ "$NODE" = "kirara" ]; then
-    echo "[*] Menyiapkan API Worker pada $NODE..."
+    nginx -t
+    service nginx restart 2>/dev/null || /etc/init.d/nginx restart 2>/dev/null || nginx -s reload 2>/dev/null || true
+    echo "[OK] Frontend Worker pada $NODE_NAME berhasil dikonfigurasi!"
+}
+
+# ==============================================================================
+# SECTION 2: Konfigurasi API Worker (nanami, todo, kirara)
+# ==============================================================================
+setup_api_worker() {
+    NODE_NAME="$1"
+    echo "[*] Menyiapkan API Worker pada $NODE_NAME..."
+    echo "nameserver 192.168.122.1" > /etc/resolv.conf
+
     apt-get update -y
-    apt-get install -y nginx php-fpm php-mysql php-cli mariadb-client
+    apt-get install -y nginx php-fpm php-cli php-mysql mariadb-client
 
     PHP_SERVICE=$(ls -1 /etc/init.d/php*-fpm 2>/dev/null | head -n 1 | xargs -n1 basename || true)
     if [ -n "$PHP_SERVICE" ]; then
@@ -76,59 +93,69 @@ elif [ "$NODE" = "nanami" ] || [ "$NODE" = "todo" ] || [ "$NODE" = "kirara" ]; t
     PHP_SOCK=$(ls -1 /run/php/php*-fpm.sock 2>/dev/null | head -n 1 || true)
     if [ -z "$PHP_SOCK" ]; then PHP_SOCK="/run/php/php-fpm.sock"; fi
 
-    mkdir -p /var/www/html
-    cat << 'EOF' > /var/www/html/index.php
+    mkdir -p /var/www/api
+    cat << EOF > /var/www/api/index.php
 <?php
 header('Content-Type: application/json');
+\$worker = gethostname();
+\$client_ip = \$_SERVER['HTTP_X_REAL_IP'] ?? \$_SERVER['REMOTE_ADDR'];
 
-$raw_ip = $_SERVER['HTTP_X_REAL_IP'] ?? $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'];
-$client_ip = trim(explode(',', $raw_ip)[0]);
-$worker = gethostname();
-$endpoint = $_SERVER['REQUEST_URI'] ?? '/api';
+// Pencatatan log ke MariaDB Master (yaga: 192.221.4.9)
+\$db_host = '192.221.4.9';
+\$db_user = 'jujutsu_user';
+\$db_pass = 'jujutsu_password';
+\$db_name = 'db_shibuya_k20';
 
-$logged = false;
-$db_error = null;
-
+\$logged = false;
 try {
-    $pdo = new PDO("mysql:host=192.221.4.9;dbname=db_shibuya_k20;charset=utf8", "jujutsu_user", "jujutsu_password", [
-        PDO::ATTR_TIMEOUT => 2,
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
-    ]);
-    $stmt = $pdo->prepare("INSERT INTO request_logs (client_ip, endpoint, worker) VALUES (?, ?, ?)");
-    $stmt->execute([$client_ip, $endpoint, $worker]);
-    $logged = true;
-} catch (Exception $e) {
-    $db_error = $e->getMessage();
+    \$conn = @new mysqli(\$db_host, \$db_user, \$db_pass, \$db_name, 3306);
+    if (!\$conn->connect_error) {
+        \$stmt = \$conn->prepare("INSERT INTO request_logs (client_ip, endpoint, worker) VALUES (?, ?, ?)");
+        if (\$stmt) {
+            \$endpoint = '/api';
+            \$stmt->bind_param("sss", \$client_ip, \$endpoint, \$worker);
+            \$stmt->execute();
+            \$stmt->close();
+            \$logged = true;
+        }
+        \$conn->close();
+    }
+} catch (Exception \$e) {
+    // Log exception ignored
 }
 
 echo json_encode([
     'status' => 'success',
-    'worker' => $worker,
-    'client_ip' => $client_ip,
-    'endpoint' => $endpoint,
-    'db_logged' => $logged,
-    'message' => 'API response from ' . $worker
-], JSON_PRETTY_PRINT) . "\n";
+    'message' => 'API Worker Response',
+    'worker' => \$worker,
+    'client_ip' => \$client_ip,
+    'db_logged' => \$logged,
+    'timestamp' => date('Y-m-d H:i:s')
+], JSON_PRETTY_PRINT);
 ?>
 EOF
-    cp /var/www/html/index.php /var/www/html/api.php 2>/dev/null || true
-    chown -R www-data:www-data /var/www/html
+    chown -R www-data:www-data /var/www/api
 
-    # Restriksi akses: hanya izinkan dari geto (192.221.4.3)
-    cat << EOF > /etc/nginx/sites-available/api_worker.conf
+    # Konfigurasi VirtualHost API dengan pembatasan akses ketat
+    cat << EOF > /etc/nginx/sites-available/api.conf
 server {
     listen 80 default_server;
-    server_name jujutsu.k20.com www.jujutsu.k20.com _;
-    root /var/www/html;
-    index index.php;
+    server_name _;
+    root /var/www/api;
+    index index.php index.html;
 
-    # Restriksi akses Soal 14
-    allow 192.221.4.3;   # geto
-    allow 192.221.4.0/24; # internal DC
+    # Restriksi akses Soal 14: Hanya izinkan internal load balancer geto dan subnet lokal
+    allow 192.221.4.3;    # geto
+    allow 192.221.4.0/24;  # Data Center internal subnet
     allow 127.0.0.1;
     deny all;
 
     location / {
+        try_files \$uri \$uri/ /index.php?\$args;
+    }
+
+    location /api {
+        alias /var/www/api;
         try_files \$uri \$uri/ /index.php?\$args;
     }
 
@@ -140,10 +167,26 @@ server {
 EOF
 
     rm -f /etc/nginx/sites-enabled/default
-    ln -sf /etc/nginx/sites-available/api_worker.conf /etc/nginx/sites-enabled/api_worker.conf
-    service nginx restart 2>/dev/null || /etc/init.d/nginx restart 2>/dev/null || nginx -s reload 2>/dev/null || true
-    echo "[✓] API worker $NODE berhasil diamankan dan berjalan!"
+    ln -sf /etc/nginx/sites-available/api.conf /etc/nginx/sites-enabled/api.conf
 
-else
-    echo "[!] Skrip Soal 14 ini ditujukan untuk worker node (maki, panda, nanami, todo, kirara)."
-fi
+    nginx -t
+    service nginx restart 2>/dev/null || /etc/init.d/nginx restart 2>/dev/null || nginx -s reload 2>/dev/null || true
+    echo "[OK] API Worker pada $NODE_NAME berhasil dikonfigurasi!"
+}
+
+# ==============================================================================
+# Dispatcher Eksekusi
+# ==============================================================================
+TARGET="${1:-$(hostname)}"
+case "$TARGET" in
+    "maki"|"panda")
+        setup_frontend_worker "$TARGET"
+        ;;
+    "nanami"|"todo"|"kirara")
+        setup_api_worker "$TARGET"
+        ;;
+    *)
+        echo "[!] Skrip Soal 14 ditujukan untuk node: maki, panda, nanami, todo, atau kirara."
+        echo "    Penggunaan: $0 [node_name]"
+        ;;
+esac

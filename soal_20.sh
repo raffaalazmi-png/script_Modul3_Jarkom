@@ -1,16 +1,19 @@
 #!/bin/bash
 # ==============================================================================
 # Soal 20: Apache Benchmark Audit & Stress Test dari Client (kusakabe)
-# Parameter: -n 600 -c 30 menuju http://jujutsu.k20.com/
+#
+# Target:
+#   - Uji Kinerja Cache: ab -n 600 -c 30 menuju http://jujutsu.k20.com/
+#   - Uji Efektivitas Rate Limit: ab -n 50 -c 10 menuju http://jujutsu.k20.com/api
 # ==============================================================================
 set -e
 
-echo "[*] Audit Kapasitas Layanan & Rate Limiting (Soal 20)"
+echo "[*] Memulai Audit Kapasitas Layanan & Rate Limiting (Soal 20)..."
 echo "nameserver 192.168.122.1" > /etc/resolv.conf
 
-# Pasang apache2-utils jika belum ada
+# 1. Pasang paket apache2-utils jika belum terpasang
 if ! which ab >/dev/null 2>&1; then
-    echo "[*] Menginstal apache2-utils (Apache Benchmark)..."
+    echo "[*] Menginstal apache2-utils..."
     if which apt-get >/dev/null 2>&1; then
         apt-get update -y && apt-get install -y apache2-utils
     elif which apk >/dev/null 2>&1; then
@@ -19,9 +22,9 @@ if ! which ab >/dev/null 2>&1; then
 fi
 
 TARGET="http://192.221.1.4/"
-TARGET_DOMAIN="http://jujutsu.k20.com/"
 TARGET_API="http://192.221.1.4/api"
 
+echo ""
 echo "=========================================================="
 echo "1. Benchmark Frontend Web (Cache Performance)"
 echo "Perintah: ab -n 600 -c 30 -H 'Host: jujutsu.k20.com' $TARGET"
@@ -30,11 +33,11 @@ ab -n 600 -c 30 -H "Host: jujutsu.k20.com" "$TARGET" || true
 
 echo ""
 echo "=========================================================="
-echo "2. Uji Efek Rate Limiting pada Endpoint /api"
+echo "2. Uji Efektivitas Rate Limiting pada Endpoint /api"
 echo "Perintah: ab -n 50 -c 10 -H 'Host: jujutsu.k20.com' $TARGET_API"
-echo "Ekspektasi: Beberapa request akan ditolak (Non-2xx / 503)"
+echo "Ekspektasi: Muncul Non-2xx responses (Status HTTP 503)"
 echo "=========================================================="
 ab -n 50 -c 10 -H "Host: jujutsu.k20.com" "$TARGET_API" || true
 
 echo ""
-echo "[✓] Benchmark selesai!"
+echo "[OK] Audit benchmark performa dan rate limiting selesai!"
