@@ -2,36 +2,8 @@
 ## Curtain Protocol: Shibuya Incident (Kelompok K-20)
 ### Solusi & Panduan Lengkap Soal Nomor 11 – 20
 
-Selamat datang di repositori solusi praktikum Jaringan Komputer Modul 3 untuk **Kelompok K-20**. Repositori ini dirancang khusus dengan penjelasan yang **ramah pemula**, runtut, dan dilengkapi dengan **perintah uji coba (testing)** yang dapat langsung dipraktikkan untuk memverifikasi setiap konfigurasi.
 
----
-
-## 📌 Ringkasan Topologi & Parameter Kelompok
-
-* **Kelompok:** `K-20`
-* **Prefix Jaringan Internal:** `192.221.X.X`
-* **Domain Utama:** `jujutsu.k20.com` (dan alias `jujutsu.k-20.com`)
-* **Subnet yang Dikonfigurasi (Soal 11–20):**
-  * **Network 1 (DMZ / Subnet 1):** `192.221.1.0/24` (Gateway: `192.221.1.1` via `jichi` eth1)
-  * **Network 4 (Data Center / Subnet 4):** `192.221.4.0/24` (Gateway: `192.221.4.1` via `jichi` eth4)
-
-```
-                            [ INTERNET / NAT1 ]
-                                     | (eth0)
-                                 [ jichi ] (Router)
-                        /                         \
-                (eth1) /                           \ (eth4)
-         [ Switch1 (DMZ) ]                  [ Switch9 (Data Center) ]
-         /       |       \                   /                     \
-    utahime    shoko     gojo          [ Switch10 ]            [ Switch11 ]
-    (Master)  (Slave)  (Proxy)        /   |   |   \           /     |     \
-                                   geto maki panda ...      yaga tengen inumaki
-                                   (LB) (Frontend)        (DB-M) (DHCP) (DB-S)
-```
-
----
-
-## 📋 Daftar Node & Peran Layanan
+##  Daftar Node & Peran Layanan
 
 | Subnet | Node | IP Address | Peran / Layanan | Tanggung Jawab Soal |
 | :--- | :--- | :--- | :--- | :--- |
@@ -49,21 +21,8 @@ Selamat datang di repositori solusi praktikum Jaringan Komputer Modul 3 untuk **
 
 ---
 
-## 🚀 Struktur Direktori Repositori
 
-```text
-├── README.md               # Dokumentasi lengkap & panduan uji coba
-├── soal_11.sh s/d 20.sh    # Script pengerjaan per nomor soal (11 s/d 20)
-├── utahime.sh, gojo.sh ... # Script per masing-masing node
-├── nodes/                  # Kumpulan script konfigurasi khusus per node
-├── soal/                   # Kumpulan script konfigurasi per nomor soal
-└── testing/
-    └── test_all.sh         # Script validasi otomatis seluruh nomor dari terminal client
-```
-
----
-
-## 📖 Pembahasan Lengkap Soal 11 – 20
+## Pembahasan Lengkap Soal 11 – 20
 
 ---
 
@@ -71,7 +30,7 @@ Selamat datang di repositori solusi praktikum Jaringan Komputer Modul 3 untuk **
 * **Node Terlibat:** `utahime` (Master - `192.221.1.2`) dan `shoko` (Slave - `192.221.1.3`)
 * **Domain:** `jujutsu.k20.com`
 
-#### 💡 Konsep untuk Pemula
+####  Konsep untuk Pemula
 DNS berfungsi seperti "buku telepon internet" yang menerjemahkan nama domain yang mudah diingat (seperti `jujutsu.k20.com`) menjadi alamat IP numerik (`192.221.1.4`).
 * **DNS Master (`utahime`):** Pemilik data domain asli. Konfigurasi zona dibuat di sini.
 * **DNS Slave (`shoko`):** Salinan cadangan. Slave otomatis mendownload rekaman dari Master melalui mekanisme **Zone Transfer** (`allow-transfer`). Jika Master sedang sibuk atau mati, Slave tetap bisa menjawab permintaan client.
